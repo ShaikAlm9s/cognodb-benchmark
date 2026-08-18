@@ -1,0 +1,24 @@
+dataset:
+  name: SNAP Wiki-Vote
+  nodes: 7115
+  relationships: 103689
+
+benchmark:
+  warmup_runs: 5
+  measured_runs: 30
+
+workloads:
+  point_lookup: true
+  traversal_1hop: true
+  traversal_2hop: true
+  traversal_3hop: true
+  filtered_lookup: true
+  aggregation: true
+  write_test: true
+
+benchmark_nodes:
+  - 30
+  - 35
+  - 40
+  - 50
+  - 60
