@@ -44,64 +44,44 @@ class TigerGraphAdapter(GraphDatabaseAdapter):
     # ---------------------------------------------------------
 
     def clear(self):
-        query = f"""
-        INTERPRET QUERY () FOR GRAPH {self.graph} {{
-            Users = {{User.*}};
-            DELETE Users;
-        }}
-        """
+        raise NotImplementedError(
+            "TigerGraph benchmark data is managed by the "
+            "dedicated loading scripts."
+        )
 
-        return self.conn.runInterpretedQuery(query)
-
-    def load_nodes(self, nodes, batch_size=1000):
-        count = 0
+    def load_nodes(self, nodes, batch_size=500):
+        total = 0
 
         for node_id in nodes:
-            self.conn.upsertVertex(
+            total += self.conn.upsertVertex(
                 "User",
                 str(node_id),
-                {
-                    "id": int(node_id),
-                },
+                {"id": int(node_id)},
             )
 
-            count += 1
+        return total
 
-        return count
+    def load_edges(self, edges, batch_size=500):
+        total = 0
 
-    def load_edges(self, edges, batch_size=1000):
-        count = 0
+        for start in range(0, len(edges), batch_size):
+            batch = edges[start:start + batch_size]
 
-        for source_id, target_id in edges:
-            self.conn.upsertEdge(
+            total += self.conn.upsertEdges(
                 "User",
-                str(source_id),
                 "FOLLOWS",
                 "User",
-                str(target_id),
-                {},
+                [
+                    (
+                        str(source),
+                        str(target),
+                        {},
+                    )
+                    for source, target in batch
+                ],
             )
 
-            count += 1
-
-        return count
-
-    # ---------------------------------------------------------
-    # Helpers
-    # ---------------------------------------------------------
-
-    def _vertex_query(self, node_id, body):
-        node_id = int(node_id)
-
-        query = f"""
-        INTERPRET QUERY () FOR GRAPH {self.graph} {{
-            Start = {{to_vertex("{node_id}", "User")}};
-
-            {body}
-        }}
-        """
-
-        return self.conn.runInterpretedQuery(query)
+        return total
 
     # ---------------------------------------------------------
     # Point lookup
@@ -110,7 +90,7 @@ class TigerGraphAdapter(GraphDatabaseAdapter):
     def point_lookup(self, node_id):
         return self.conn.getVerticesById(
             "User",
-            [str(int(node_id))],
+            [str(node_id)],
         )
 
     # ---------------------------------------------------------
@@ -118,16 +98,14 @@ class TigerGraphAdapter(GraphDatabaseAdapter):
     # ---------------------------------------------------------
 
     def traversal_1hop(self, node_id):
-
-        return self._vertex_query(
-            node_id,
-            """
-            Result = SELECT v
-                     FROM Start:u
-                     -(FOLLOWS)-> User:v;
-
-            PRINT Result;
-            """,
+        return self.conn.runInstalledQuery(
+            "benchmark_1hop",
+            {
+                "p": {
+                    "id": str(node_id),
+                    "type": "User",
+                }
+            },
         )
 
     # ---------------------------------------------------------
@@ -135,20 +113,14 @@ class TigerGraphAdapter(GraphDatabaseAdapter):
     # ---------------------------------------------------------
 
     def traversal_2hop(self, node_id):
-
-        return self._vertex_query(
-            node_id,
-            """
-            Hop1 = SELECT v
-                   FROM Start:u
-                   -(FOLLOWS)-> User:v;
-
-            Hop2 = SELECT w
-                   FROM Hop1:v
-                   -(FOLLOWS)-> User:w;
-
-            PRINT Hop2;
-            """,
+        return self.conn.runInstalledQuery(
+            "benchmark_2hop",
+            {
+                "p": {
+                    "id": str(node_id),
+                    "type": "User",
+                }
+            },
         )
 
     # ---------------------------------------------------------
@@ -156,24 +128,14 @@ class TigerGraphAdapter(GraphDatabaseAdapter):
     # ---------------------------------------------------------
 
     def traversal_3hop(self, node_id):
-
-        return self._vertex_query(
-            node_id,
-            """
-            Hop1 = SELECT v
-                   FROM Start:u
-                   -(FOLLOWS)-> User:v;
-
-            Hop2 = SELECT w
-                   FROM Hop1:v
-                   -(FOLLOWS)-> User:w;
-
-            Hop3 = SELECT x
-                   FROM Hop2:w
-                   -(FOLLOWS)-> User:x;
-
-            PRINT Hop3;
-            """,
+        return self.conn.runInstalledQuery(
+            "benchmark_3hop",
+            {
+                "p": {
+                    "id": str(node_id),
+                    "type": "User",
+                }
+            },
         )
 
     # ---------------------------------------------------------
@@ -181,46 +143,39 @@ class TigerGraphAdapter(GraphDatabaseAdapter):
     # ---------------------------------------------------------
 
     def filtered_lookup(self, node_id):
-
-        return self._vertex_query(
-            node_id,
-            """
-            Result = SELECT u
-                     FROM Start:u;
-
-            PRINT Result;
-            """,
+        vertices = self.conn.getVerticesById(
+            "User",
+            [str(node_id)],
         )
+
+        return [
+            vertex
+            for vertex in vertices
+            if vertex.get("v_type") == "User"
+        ]
 
     # ---------------------------------------------------------
     # Aggregation
     # ---------------------------------------------------------
 
     def aggregation(self):
+        vertices = self.conn.getVertices(
+            "User",
+            limit=100000,
+        )
 
-        query = f"""
-        INTERPRET QUERY () FOR GRAPH {self.graph} {{
-            Users = {{User.*}};
-
-            UserCount = Users.size();
-
-            PRINT UserCount;
-        }}
-        """
-
-        return self.conn.runInterpretedQuery(query)
+        return len(vertices)
 
     # ---------------------------------------------------------
     # Write operation
     # ---------------------------------------------------------
 
     def write_test(self, source_id, target_id):
-
         return self.conn.upsertEdge(
             "User",
-            str(int(source_id)),
-            "BENCHMARK_WRITE",
+            str(source_id),
+            "FOLLOWS",
             "User",
-            str(int(target_id)),
+            str(target_id),
             {},
         )

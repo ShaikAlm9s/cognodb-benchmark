@@ -1,5 +1,6 @@
 ﻿import csv
 import os
+import time
 
 import pyTigerGraph
 from dotenv import load_dotenv
@@ -35,37 +36,53 @@ def main():
                 (
                     str(row["source"]),
                     str(row["target"]),
+                    {},
                 )
             )
 
     print(f"Edges to load: {len(rows)}")
+    print(f"Batch size: {BATCH_SIZE}")
+    print()
 
     total = 0
+    start_time = time.perf_counter()
+
+    total_batches = (len(rows) + BATCH_SIZE - 1) // BATCH_SIZE
 
     for start in range(0, len(rows), BATCH_SIZE):
         batch = rows[start:start + BATCH_SIZE]
 
-        written = 0
-
-        for source, target in batch:
-            written += conn.upsertEdge(
-                "User",
-                source,
-                "FOLLOWS",
-                "User",
-                target,
-                {},
-            )
+        written = conn.upsertEdges(
+            "User",
+            "FOLLOWS",
+            "User",
+            batch,
+        )
 
         total += written
 
+        processed = min(start + BATCH_SIZE, len(rows))
+
         print(
-            f"Processed {min(start + BATCH_SIZE, len(rows))}"
-            f"/{len(rows)} edges"
+            f"Edge batch "
+            f"{(start // BATCH_SIZE) + 1}/{total_batches}: "
+            f"{processed}/{len(rows)} processed, "
+            f"{written} written"
         )
 
+    elapsed = time.perf_counter() - start_time
+
     print()
-    print(f"Total FOLLOWS upserts: {total}")
+    print("TigerGraph edge loading complete.")
+    print(f"Edges requested: {len(rows)}")
+    print(f"Edges accepted: {total}")
+    print(f"Elapsed time: {elapsed:.3f} seconds")
+
+    if elapsed > 0:
+        print(
+            f"Relationship throughput: "
+            f"{total / elapsed:.2f} edges/sec"
+        )
 
     edges = conn.getEdges(
         "User",
