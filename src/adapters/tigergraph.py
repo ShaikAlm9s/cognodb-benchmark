@@ -1,13 +1,15 @@
-import os
+﻿import os
 
 import pyTigerGraph
 from dotenv import load_dotenv
+
+from adapters.base import GraphDatabaseAdapter
 
 
 load_dotenv()
 
 
-class TigerGraphAdapter:
+class TigerGraphAdapter(GraphDatabaseAdapter):
 
     def __init__(self):
         self.host = os.environ["TIGERGRAPH_HOST"]
@@ -38,206 +40,187 @@ class TigerGraphAdapter:
         self.conn = None
 
     # ---------------------------------------------------------
+    # Data loading
+    # ---------------------------------------------------------
+
+    def clear(self):
+        query = f"""
+        INTERPRET QUERY () FOR GRAPH {self.graph} {{
+            Users = {{User.*}};
+            DELETE Users;
+        }}
+        """
+
+        return self.conn.runInterpretedQuery(query)
+
+    def load_nodes(self, nodes, batch_size=1000):
+        count = 0
+
+        for node_id in nodes:
+            self.conn.upsertVertex(
+                "User",
+                str(node_id),
+                {
+                    "id": int(node_id),
+                },
+            )
+
+            count += 1
+
+        return count
+
+    def load_edges(self, edges, batch_size=1000):
+        count = 0
+
+        for source_id, target_id in edges:
+            self.conn.upsertEdge(
+                "User",
+                str(source_id),
+                "FOLLOWS",
+                "User",
+                str(target_id),
+                {},
+            )
+
+            count += 1
+
+        return count
+
+    # ---------------------------------------------------------
+    # Helpers
+    # ---------------------------------------------------------
+
+    def _vertex_query(self, node_id, body):
+        node_id = int(node_id)
+
+        query = f"""
+        INTERPRET QUERY () FOR GRAPH {self.graph} {{
+            Start = {{to_vertex("{node_id}", "User")}};
+
+            {body}
+        }}
+        """
+
+        return self.conn.runInterpretedQuery(query)
+
+    # ---------------------------------------------------------
     # Point lookup
     # ---------------------------------------------------------
 
-    def point_lookup(self, transaction_id):
+    def point_lookup(self, node_id):
         return self.conn.getVerticesById(
-            "Payment_Transaction",
-            [str(transaction_id)],
+            "User",
+            [str(int(node_id))],
         )
 
     # ---------------------------------------------------------
     # 1-hop traversal
-    #
-    # Payment_Transaction
-    #       -> Merchant
     # ---------------------------------------------------------
 
-    def traversal_1hop(self, transaction_id):
-        return self.conn.getEdges(
-            "Payment_Transaction",
-            str(transaction_id),
-            edgeType="Merchant_Receive_Transaction",
+    def traversal_1hop(self, node_id):
+
+        return self._vertex_query(
+            node_id,
+            """
+            Result = SELECT v
+                     FROM Start:u
+                     -(FOLLOWS)-> User:v;
+
+            PRINT Result;
+            """,
         )
 
     # ---------------------------------------------------------
     # 2-hop traversal
-    #
-    # Payment_Transaction
-    #       -> Card
-    #       -> Merchant
-    #
-    # Executed server-side.
     # ---------------------------------------------------------
 
-    def traversal_2hop(self, transaction_id):
-        transaction_id = str(transaction_id).replace(
-            '"',
-            '\\"',
+    def traversal_2hop(self, node_id):
+
+        return self._vertex_query(
+            node_id,
+            """
+            Hop1 = SELECT v
+                   FROM Start:u
+                   -(FOLLOWS)-> User:v;
+
+            Hop2 = SELECT w
+                   FROM Hop1:v
+                   -(FOLLOWS)-> User:w;
+
+            PRINT Hop2;
+            """,
         )
-
-        query = f"""
-        INTERPRET QUERY () FOR GRAPH $graphname {{
-
-            Start = {{Payment_Transaction.*}};
-
-            Cards = SELECT c
-                    FROM Start:s
-                    -(Card_Send_Transaction)- Card:c
-                    WHERE s.id == "{transaction_id}";
-
-            Merchants = SELECT m
-                        FROM Cards:c
-                        -(Has_Interaction_With_Merchant)- Merchant:m;
-
-            PRINT Merchants;
-        }}
-        """
-
-        return self.conn.runInterpretedQuery(query)
 
     # ---------------------------------------------------------
     # 3-hop traversal
-    #
-    # Payment_Transaction
-    #       -> Card
-    #       -> Merchant
-    #       -> Merchant_Category
-    #
-    # Executed server-side.
     # ---------------------------------------------------------
 
-    def traversal_3hop(self, transaction_id):
-        transaction_id = str(transaction_id).replace(
-            '"',
-            '\\"',
+    def traversal_3hop(self, node_id):
+
+        return self._vertex_query(
+            node_id,
+            """
+            Hop1 = SELECT v
+                   FROM Start:u
+                   -(FOLLOWS)-> User:v;
+
+            Hop2 = SELECT w
+                   FROM Hop1:v
+                   -(FOLLOWS)-> User:w;
+
+            Hop3 = SELECT x
+                   FROM Hop2:w
+                   -(FOLLOWS)-> User:x;
+
+            PRINT Hop3;
+            """,
         )
-
-        query = f"""
-        INTERPRET QUERY () FOR GRAPH $graphname {{
-
-            Start = {{Payment_Transaction.*}};
-
-            Cards = SELECT c
-                    FROM Start:s
-                    -(Card_Send_Transaction)- Card:c
-                    WHERE s.id == "{transaction_id}";
-
-            Merchants = SELECT m
-                        FROM Cards:c
-                        -(Has_Interaction_With_Merchant)- Merchant:m;
-
-            Categories = SELECT mc
-                        FROM Merchants:m
-                        -(Merchant_Assigned)- Merchant_Category:mc;
-
-            PRINT Categories;
-        }}
-        """
-
-        return self.conn.runInterpretedQuery(query)
 
     # ---------------------------------------------------------
     # Filtered lookup
     # ---------------------------------------------------------
 
-    def filtered_lookup(self, transaction_id):
-        rows = self.conn.getVerticesById(
-            "Payment_Transaction",
-            [str(transaction_id)],
+    def filtered_lookup(self, node_id):
+
+        return self._vertex_query(
+            node_id,
+            """
+            Result = SELECT u
+                     FROM Start:u;
+
+            PRINT Result;
+            """,
         )
-
-        if not rows:
-            return None
-
-        transaction = rows[0]
-
-        attributes = transaction.get(
-            "attributes",
-            {},
-        )
-
-        return {
-            "id": attributes.get(
-                "id",
-                transaction.get("v_id"),
-            ),
-            "amount": attributes.get("amount"),
-            "is_fraud": attributes.get("is_fraud"),
-            "transaction_time": attributes.get("transaction_time"),
-        }
 
     # ---------------------------------------------------------
     # Aggregation
     # ---------------------------------------------------------
 
     def aggregation(self):
-        transactions = self.conn.getVertices(
-            "Payment_Transaction",
-            limit=1000,
-        )
 
-        total_amount = 0.0
-        transaction_count = 0
-        fraud_count = 0
+        query = f"""
+        INTERPRET QUERY () FOR GRAPH {self.graph} {{
+            Users = {{User.*}};
 
-        for transaction in transactions:
+            UserCount = Users.size();
 
-            attributes = transaction.get(
-                "attributes",
-                {},
-            )
+            PRINT UserCount;
+        }}
+        """
 
-            amount = attributes.get("amount", 0)
-            is_fraud = attributes.get("is_fraud", 0)
-
-            if amount is None:
-                amount = 0
-
-            if is_fraud is None:
-                is_fraud = 0
-
-            try:
-                total_amount += float(amount)
-            except (TypeError, ValueError):
-                pass
-
-            transaction_count += 1
-
-            try:
-                fraud_count += int(is_fraud)
-            except (TypeError, ValueError):
-                pass
-
-        average_amount = (
-            total_amount / transaction_count
-            if transaction_count > 0
-            else 0.0
-        )
-
-        return {
-            "transaction_count": transaction_count,
-            "total_amount": total_amount,
-            "average_amount": average_amount,
-            "fraud_count": fraud_count,
-        }
+        return self.conn.runInterpretedQuery(query)
 
     # ---------------------------------------------------------
     # Write operation
-    #
-    # The benchmark runner calls:
-    #
-    #     write_test(source_id, target_id)
-    #
-    # We use target_id for the upsert.
     # ---------------------------------------------------------
 
     def write_test(self, source_id, target_id):
-        return self.conn.upsertVertex(
-            "Payment_Transaction",
-            str(target_id),
-            {
-                "amount": (0.0, "+"),
-            },
+
+        return self.conn.upsertEdge(
+            "User",
+            str(int(source_id)),
+            "BENCHMARK_WRITE",
+            "User",
+            str(int(target_id)),
+            {},
         )
